@@ -2,6 +2,50 @@
 #include "bwtree/bwtree.h"
 #include "gtest/gtest.h"
 #include "util/random_test_util.h"
+#include "xxHash/xxh3.h"
+
+struct BigKey {
+  uint64_t data_[8];
+};
+
+namespace std {
+
+template <>
+struct hash<BigKey> {
+  /**
+   * @param key key to be hashed
+   * @return hash of the key's underlying data
+   */
+  size_t operator()(const BigKey &key) const {
+    // you're technically hashing more bytes than you need to, but hopefully key size isn't wildly over-provisioned
+    return static_cast<size_t>(XXH3_64bits(reinterpret_cast<const void *>(key.data_), 64));
+  }
+};
+
+template <>
+struct less<BigKey> {
+  /**
+   * Due to the KeySize constraints, this should be optimized to a single SIMD instruction.
+   * @param lhs first key to be compared
+   * @param rhs second key to be compared
+   * @return true if first key is less than the second key
+   */
+  bool operator()(const BigKey &lhs, const BigKey &rhs) const { return std::memcmp(lhs.data_, rhs.data_, 64) < 0; }
+};
+
+template <>
+struct equal_to<BigKey> {
+  /**
+   * @param lhs first key to be compared
+   * @param rhs second key to be compared
+   * @return true if first key is equal to the second key
+   */
+  bool operator()(const BigKey &lhs, const BigKey &rhs) const {
+    // you're technically comparing more bytes than you need to, but hopefully key size isn't wildly over-provisioned
+    return std::memcmp(lhs.data_, rhs.data_, 64) == 0;
+  }
+};
+}  // namespace std
 
 namespace terrier {
 /**
@@ -14,51 +58,13 @@ namespace terrier {
 struct BwTreeTestUtil {
   BwTreeTestUtil() = delete;
 
-  /*
-   * class KeyComparator - Test whether BwTree supports context
-   *                       sensitive key comparator
-   *
-   * If a context-sensitive KeyComparator object is being used
-   * then it should follow rules like:
-   *   1. There could be no default constructor
-   *   2. There MUST be a copy constructor
-   *   3. operator() must be const
-   *
-   */
-  class KeyComparator {
-   public:
-    bool operator()(const int64_t k1, const int64_t k2) const { return k1 < k2; }
-
-    explicit KeyComparator(int dummy UNUSED_ATTRIBUTE) {}
-
-    KeyComparator() = delete;
-  };
-
-  /*
-   * class KeyEqualityChecker - Tests context sensitive key equality
-   *                            checker inside BwTree
-   *
-   * NOTE: This class is only used in KeyEqual() function, and is not
-   * used as STL template argument, it is not necessary to provide
-   * the object everytime a container is initialized
-   */
-  class KeyEqualityChecker {
-   public:
-    bool operator()(const int64_t k1, const int64_t k2) const { return k1 == k2; }
-
-    explicit KeyEqualityChecker(int dummy UNUSED_ATTRIBUTE) {}
-
-    KeyEqualityChecker() = delete;
-  };
-
-  using TreeType =
-      third_party::bwtree::BwTree<int64_t, int64_t, BwTreeTestUtil::KeyComparator, BwTreeTestUtil::KeyEqualityChecker>;
+  using TreeType = third_party::bwtree::BwTree<BigKey, int64_t>;
 
   /**
    * Adapted from https://github.com/wangziqi2013/BwTree/blob/master/test/test_suite.cpp
    */
   static TreeType *GetEmptyTree() {
-    auto *tree = new TreeType{true, BwTreeTestUtil::KeyComparator{1}, BwTreeTestUtil::KeyEqualityChecker{1}};
+    auto *tree = new TreeType{true};
 
     // By default let is serve single thread (i.e. current one)
     // and assign gc_id = 0 to the current thread
