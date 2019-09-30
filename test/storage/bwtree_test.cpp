@@ -22,10 +22,7 @@ void PrintBasicMemoryStats() { malloc_stats_print(NULL, NULL, NULL); }
 
 // NOLINTNEXTLINE
 TEST_F(BwTreeTests, MemoryUsageSingleThreadInsert) {
-  PrintBasicMemoryStats();
   auto *const tree = BwTreeTestUtil::GetEmptyTree();
-
-  std::cout << "Allocated: " << tree->GetMemoryUsage() << std::endl;
 
   for (uint32_t i = 0; i < num_keys_; i++) {
     BigKey key;
@@ -35,20 +32,14 @@ TEST_F(BwTreeTests, MemoryUsageSingleThreadInsert) {
 
   PrintBasicMemoryStats();
 
-  std::cout << "Allocated: " << tree->GetMemoryUsage() << std::endl;
-
   delete tree;
-  PrintBasicMemoryStats();
 }
 
 // NOLINTNEXTLINE
 TEST_F(BwTreeTests, MemoryUsageMultiThreadInsert) {
-  PrintBasicMemoryStats();
   auto *const tree = BwTreeTestUtil::GetEmptyTree();
   tree->UpdateThreadLocal(num_threads_ + 1);
   tree->AssignGCID(0);
-
-  std::cout << "Allocated: " << tree->GetMemoryUsage() << std::endl;
 
   auto workload = [&](uint32_t id) {
     const uint32_t gcid = id + 1;
@@ -56,8 +47,6 @@ TEST_F(BwTreeTests, MemoryUsageMultiThreadInsert) {
 
     uint32_t start_key = num_keys_ / num_threads_ * id;
     uint32_t end_key = start_key + num_keys_ / num_threads_ - 1;
-
-    std::cout << start_key << " " << end_key << std::endl;
 
     for (uint32_t i = start_key; i < end_key; i++) {
       BigKey key;
@@ -78,10 +67,7 @@ TEST_F(BwTreeTests, MemoryUsageMultiThreadInsert) {
 
   PrintBasicMemoryStats();
 
-  std::cout << "Allocated: " << tree->GetMemoryUsage() << std::endl;
-
   delete tree;
-  PrintBasicMemoryStats();
 }
 
 }  // namespace terrier
