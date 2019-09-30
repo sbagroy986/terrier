@@ -26,14 +26,17 @@ void PrintBasicMemoryStats() { malloc_stats_print(NULL, NULL, NULL); }
 TEST_F(BwTreeTests, MemoryUsage) {
   PrintBasicMemoryStats();
   auto *const tree = BwTreeTestUtil::GetEmptyTree();
-  const uint32_t num_keys_ = 1000000 * 100;
+  tree->UpdateThreadLocal(num_threads_ + 1);
+  const uint32_t num_keys = 1000000 * 10;
+
+  std::cout << "Allocated: " << tree->GetMemoryUsage() << std::endl;
 
   auto workload = [&](uint32_t id) {
     const uint32_t gcid = id + 1;
     tree->AssignGCID(gcid);
 
-    uint32_t start_key = num_keys_ / num_threads_ * id;
-    uint32_t end_key = start_key + num_keys_ / num_threads_ - 1;
+    uint32_t start_key = num_keys / num_threads_ * id;
+    uint32_t end_key = start_key + num_keys / num_threads_ - 1;
 
     std::cout << start_key << " " << end_key << std::endl;
 
@@ -45,13 +48,23 @@ TEST_F(BwTreeTests, MemoryUsage) {
     tree->UnregisterThread(gcid);
   };
 
+//  for (uint32_t i = 0; i < num_keys; i++) {
+//    BigKey key;
+//    key.data_[0] = i;
+//    tree->Insert(key, i);
+//  }
+
   common::WorkerPool *thread_pool = new common::WorkerPool(num_threads_, {});
 
   MultiThreadTestUtil::RunThreadsUntilFinish(thread_pool, num_threads_, workload);
 
   delete thread_pool;
 
+  tree->UpdateThreadLocal(1);
+
   PrintBasicMemoryStats();
+
+  std::cout << "Allocated: " << tree->GetMemoryUsage() << std::endl;
 
   delete tree;
   PrintBasicMemoryStats();

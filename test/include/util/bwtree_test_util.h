@@ -1,11 +1,9 @@
 #pragma once
 #include "bwtree/bwtree.h"
-#include "gtest/gtest.h"
-#include "util/random_test_util.h"
 #include "xxHash/xxh3.h"
 
 struct BigKey {
-  uint64_t data_[8];
+  uint64_t data_[1];
 };
 
 namespace std {
@@ -18,7 +16,7 @@ struct hash<BigKey> {
    */
   size_t operator()(const BigKey &key) const {
     // you're technically hashing more bytes than you need to, but hopefully key size isn't wildly over-provisioned
-    return static_cast<size_t>(XXH3_64bits(reinterpret_cast<const void *>(key.data_), 64));
+    return static_cast<size_t>(XXH3_64bits(reinterpret_cast<const void *>(key.data_), sizeof(uint64_t)));
   }
 };
 
@@ -30,7 +28,7 @@ struct less<BigKey> {
    * @param rhs second key to be compared
    * @return true if first key is less than the second key
    */
-  bool operator()(const BigKey &lhs, const BigKey &rhs) const { return std::memcmp(lhs.data_, rhs.data_, 64) < 0; }
+  bool operator()(const BigKey &lhs, const BigKey &rhs) const { return std::memcmp(lhs.data_, rhs.data_, sizeof(uint64_t)) < 0; }
 };
 
 template <>
@@ -42,7 +40,7 @@ struct equal_to<BigKey> {
    */
   bool operator()(const BigKey &lhs, const BigKey &rhs) const {
     // you're technically comparing more bytes than you need to, but hopefully key size isn't wildly over-provisioned
-    return std::memcmp(lhs.data_, rhs.data_, 64) == 0;
+    return std::memcmp(lhs.data_, rhs.data_, sizeof(uint64_t)) == 0;
   }
 };
 }  // namespace std
