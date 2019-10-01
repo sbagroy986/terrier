@@ -16,12 +16,11 @@ struct BwTreeTests : public TerrierTest {
     for (uint32_t i = 0; i < num_keys_; i++) {
       key_permutation_[i] = i;
     }
-    std::shuffle(key_permutation_.begin(), key_permutation_.end(), generator_);
   }
 
   void TearDown() override { TerrierTest::TearDown(); }
 
-  const uint32_t num_keys_ = 1e6;
+  const uint32_t num_keys_ = 1e8;
   const uint32_t num_threads_ = 4;
   std::default_random_engine generator_;
   std::vector<uint32_t> key_permutation_;
@@ -30,16 +29,16 @@ struct BwTreeTests : public TerrierTest {
 void PrintBasicMemoryStats() { malloc_stats_print(NULL, NULL, NULL); }
 
 // NOLINTNEXTLINE
-TEST_F(BwTreeTests, MemoryUsageSingleThreadInsert) {
+TEST_F(BwTreeTests, MemoryUsageSingleThreadInsertSequential) {
   auto *const tree = BwTreeTestUtil::GetEmptyTree();
 
   for (uint32_t i = 0; i < num_keys_; i++) {
     BigKey key;
-    key.data_[0] = i;
+    key.data_[0] = key_permutation_[i];
     tree->Insert(key, i);
   }
 
-  std::cout << "Allocated: " << tree->GetMemoryUsage() << std::endl;
+  //  std::cout << "Allocated: " << tree->GetMemoryUsage() << std::endl;
 
   PrintBasicMemoryStats();
 
@@ -47,7 +46,26 @@ TEST_F(BwTreeTests, MemoryUsageSingleThreadInsert) {
 }
 
 // NOLINTNEXTLINE
-TEST_F(BwTreeTests, MemoryUsageMultiThreadInsert) {
+TEST_F(BwTreeTests, MemoryUsageSingleThreadInsertRandom) {
+  auto *const tree = BwTreeTestUtil::GetEmptyTree();
+
+  std::shuffle(key_permutation_.begin(), key_permutation_.end(), generator_);
+
+  for (uint32_t i = 0; i < num_keys_; i++) {
+    BigKey key;
+    key.data_[0] = key_permutation_[i];
+    tree->Insert(key, i);
+  }
+
+  //  std::cout << "Allocated: " << tree->GetMemoryUsage() << std::endl;
+
+  PrintBasicMemoryStats();
+
+  delete tree;
+}
+
+// NOLINTNEXTLINE
+ TEST_F(BwTreeTests, MemoryUsageMultiThreadInsert) {
   auto *const tree = BwTreeTestUtil::GetEmptyTree();
   tree->UpdateThreadLocal(num_threads_ + 1);
   tree->AssignGCID(0);
