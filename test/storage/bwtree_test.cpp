@@ -10,12 +10,21 @@ namespace terrier {
  * Please do not use these as a model for other tests within this repository.
  */
 struct BwTreeTests : public TerrierTest {
-  void SetUp() override { TerrierTest::SetUp(); }
+  void SetUp() override {
+    TerrierTest::SetUp();
+    key_permutation_.reserve(num_keys_);
+    for (uint32_t i = 0; i < num_keys_; i++) {
+      key_permutation_[i] = i;
+    }
+    std::shuffle(key_permutation_.begin(), key_permutation_.end(), generator_);
+  }
 
   void TearDown() override { TerrierTest::TearDown(); }
 
-  const uint32_t num_keys_ = 1e7;
+  const uint32_t num_keys_ = 1e6;
   const uint32_t num_threads_ = 4;
+  std::default_random_engine generator_;
+  std::vector<uint32_t> key_permutation_;
 };
 
 void PrintBasicMemoryStats() { malloc_stats_print(NULL, NULL, NULL); }
@@ -29,6 +38,8 @@ TEST_F(BwTreeTests, MemoryUsageSingleThreadInsert) {
     key.data_[0] = i;
     tree->Insert(key, i);
   }
+
+  std::cout << "Allocated: " << tree->GetMemoryUsage() << std::endl;
 
   PrintBasicMemoryStats();
 

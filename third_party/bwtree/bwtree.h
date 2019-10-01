@@ -2593,10 +2593,10 @@ class BwTree : public BwTreeBase {
 
   uint64_t GetMemoryUsage() {
     const auto num_nodes = next_unused_node_id - node_id_list.size();
-    const auto avg_node_size =
-        sizeof(ElasticNode<KeyValuePair>) + 64 * sizeof(KeyValuePair) + AllocationMeta::CHUNK_SIZE();
+    const auto node_size = sizeof(ElasticNode<KeyValuePair>) + LEAF_NODE_SIZE_UPPER_THRESHOLD * sizeof(KeyValuePair) +
+                           AllocationMeta::CHUNK_SIZE();
     const auto mapping_table_bytes = num_nodes * sizeof(uintptr_t);
-    const auto node_bytes = num_nodes * avg_node_size;
+    const auto node_bytes = num_nodes * node_size;
     return mapping_table_bytes + node_bytes;
   }
 
