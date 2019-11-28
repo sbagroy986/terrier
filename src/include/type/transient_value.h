@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstring>
 #include <string>
+
 #include "common/hash_util.h"
 #include "common/json.h"
 #include "common/macros.h"
@@ -68,7 +69,8 @@ class TransientValue {
    */
   ~TransientValue() {
     if (Type() == TypeId::VARCHAR) {
-      delete[] reinterpret_cast<char *const>(data_);
+      const auto *varlen = reinterpret_cast<const storage::VarlenEntry *const>(data_);
+      if (varlen != nullptr && varlen->NeedReclaim()) delete[] varlen->Content();
     }
   }
 
@@ -84,20 +86,19 @@ class TransientValue {
    */
   bool operator==(const TransientValue &rhs) const {
     if (type_ != rhs.type_) return false;  // checks TypeId and NULL at the same time due to stolen MSB of type_ field
-    if (type_ != TypeId::VARCHAR) return data_ == rhs.data_;
+    if (type_ != TypeId::VARCHAR) {
+      const auto num_bytes =
+          std::min(static_cast<uint8_t>(static_cast<uint8_t>(TypeUtil::GetTypeSize(type_)) & INT8_MAX),
+                   static_cast<uint8_t>(16));
+      return std::memcmp(data_, rhs.data_, num_bytes) == 0;
+    }
 
-    const auto *const varchar = reinterpret_cast<const char *const>(data_);
-    const uint32_t length = *reinterpret_cast<const uint32_t *const>(varchar);
+    const auto *const lhs_varlen = reinterpret_cast<const storage::VarlenEntry *const>(data_);
+    const auto *const rhs_varlen = reinterpret_cast<const storage::VarlenEntry *const>(rhs.data_);
 
-    const auto *const rhs_varchar = reinterpret_cast<const char *const>(rhs.data_);
-    const uint32_t rhs_length = *reinterpret_cast<const uint32_t *const>(rhs_varchar);
+    if (lhs_varlen->Size() != rhs_varlen->Size()) return false;
 
-    if (length != rhs_length) return false;
-
-    const char *const varchar_contents = varchar + sizeof(uint32_t);
-    const char *const rhs_varchar_contents = rhs_varchar + sizeof(uint32_t);
-
-    return std::memcmp(varchar_contents, rhs_varchar_contents, length) == 0;
+    return std::memcmp(lhs_varlen->Content(), rhs_varlen->Content(), lhs_varlen->Size()) == 0;
   }
 
   /**
@@ -119,9 +120,8 @@ class TransientValue {
       return common::HashUtil::CombineHashes(type_hash, data_hash);
     }
 
-    const uint32_t length = *reinterpret_cast<const uint32_t *const>(data_);
-    const auto data_hash =
-        common::HashUtil::HashBytes(reinterpret_cast<const byte *const>(data_), length + sizeof(uint32_t));
+    const auto *varlen = reinterpret_cast<const storage::VarlenEntry *const>(data_);
+    const auto data_hash = common::HashUtil::HashBytes(varlen->Content(), varlen->Size());
     return common::HashUtil::CombineHashes(type_hash, data_hash);
   }
 
@@ -141,9 +141,10 @@ class TransientValue {
       }
       // take ownership of other's contents
       type_ = other.type_;
-      data_ = other.data_;
+      std::memcpy(data_, other.data_, 16);
+      //      data_ = other.data_;
       // leave other in a valid state, let's just set it to a NULL boolean for fun
-      other.data_ = 0;
+      std::memset(other.data_, 0, 16);
       other.type_ = TypeId::BOOLEAN;
       other.SetNull(true);
     }
@@ -161,9 +162,9 @@ class TransientValue {
   TransientValue(TransientValue &&other) noexcept {
     // take ownership of other's contents
     type_ = other.type_;
-    data_ = other.data_;
+    std::memcpy(data_, other.data_, 16);
     // leave other in a valid state, let's just set it to a NULL boolean for fun
-    other.data_ = 0;
+    std::memset(other.data_, 0, 16);
     other.type_ = TypeId::BOOLEAN;
     other.SetNull(true);
   }
@@ -180,14 +181,14 @@ class TransientValue {
    */
   nlohmann::json ToJson() const {
     nlohmann::json j;
-    j["type"] = type_;
-    if (Type() == TypeId::VARCHAR && !Null()) {
-      const uint32_t length = *reinterpret_cast<const uint32_t *const>(data_);
-      auto varchar = std::string(reinterpret_cast<const char *const>(data_), length + sizeof(uint32_t));
-      j["data"] = varchar;
-    } else {
-      j["data"] = data_;
-    }
+    //    j["type"] = type_;
+    //    if (Type() == TypeId::VARCHAR && !Null()) {
+    //      const uint32_t length = *reinterpret_cast<const uint32_t *const>(data_);
+    //      auto varchar = std::string(reinterpret_cast<const char *const>(data_), length + sizeof(uint32_t));
+    //      j["data"] = varchar;
+    //    } else {
+    //      j["data"] = data_;
+    //    }
     return j;
   }
 
@@ -197,13 +198,13 @@ class TransientValue {
    * values
    */
   void FromJson(const nlohmann::json &j) {
-    type_ = j.at("type").get<TypeId>();
-    if (Type() == TypeId::VARCHAR && !Null()) {
-      data_ = 0;
-      CopyVarChar(reinterpret_cast<const char *const>(j.at("data").get<std::string>().c_str()));
-    } else {
-      data_ = j.at("data").get<uintptr_t>();
-    }
+    //    type_ = j.at("type").get<TypeId>();
+    //    if (Type() == TypeId::VARCHAR && !Null()) {
+    //      std::memset(data_, 0, 16);
+    //      CopyVarChar(reinterpret_cast<const char *const>(j.at("data").get<std::string>().c_str()));
+    //    } else {
+    //      data_ = j.at("data").get<uintptr_t>();
+    //    }
   }
 
   /**
@@ -228,7 +229,10 @@ class TransientValue {
    * Constructor for NULL value
    * @param type type id
    */
-  explicit TransientValue(const TypeId type) : type_(type), data_(0) { SetNull(true); }
+  explicit TransientValue(const TypeId type) : type_(type) {
+    std::memset(data_, 0, 16);
+    SetNull(true);
+  }
 
   // The following tests make sure that json serialization  works, so they need to
   // be friends of the TransientValue class.
@@ -245,10 +249,10 @@ class TransientValue {
   template <typename T>
   TransientValue(const TypeId type, T data) {
     // clear internal buffer
-    data_ = 0;
+    std::memset(data_, 0, 16);
     type_ = type;
     const auto num_bytes = std::min(static_cast<uint8_t>(static_cast<uint8_t>(TypeUtil::GetTypeSize(type)) & INT8_MAX),
-                                    static_cast<uint8_t>(sizeof(uintptr_t)));
+                                    static_cast<uint8_t>(16));
     std::memcpy(&data_, &data, num_bytes);
   }
 
@@ -263,12 +267,12 @@ class TransientValue {
    */
   TransientValue(const TransientValue &other) {
     // clear internal buffer
-    data_ = 0;
+    std::memset(data_, 0, 16);
     type_ = other.type_;
-    if (Type() != TypeId::VARCHAR || other.data_ == 0) {
-      data_ = other.data_;
+    if (Type() != TypeId::VARCHAR || std::memcmp(data_, other.data_, 16) == 0) {
+      std::memcpy(data_, other.data_, 16);
     } else {
-      CopyVarChar(reinterpret_cast<const char *const>(other.data_));
+      CopyVarlenEntry(*(reinterpret_cast<const storage::VarlenEntry *const>(other.data_)));
     }
   }
 
@@ -284,17 +288,17 @@ class TransientValue {
    */
   TransientValue &operator=(const TransientValue &other) {
     if (this != &other) {  // self-assignment check expected
-      if (Type() == TypeId::VARCHAR && data_ != 0) {
-        // free VARCHAR buffer
-        delete[] reinterpret_cast<char *const>(data_);
+      if (Type() == TypeId::VARCHAR) {
+        const auto *varlen = reinterpret_cast<const storage::VarlenEntry *const>(data_);
+        if (varlen != nullptr && varlen->NeedReclaim()) delete[] varlen->Content();
       }
       // clear internal buffer
-      data_ = 0;
+      std::memset(data_, 0, 16);
       type_ = other.type_;
-      if (Type() != TypeId::VARCHAR || other.data_ == 0) {
-        data_ = other.data_;
+      if (Type() != TypeId::VARCHAR || std::memcmp(data_, other.data_, 16) == 0) {
+        std::memcpy(data_, other.data_, 16);
       } else {
-        CopyVarChar(reinterpret_cast<const char *const>(other.data_));
+        CopyVarlenEntry(*(reinterpret_cast<const storage::VarlenEntry *const>(other.data_)));
       }
     }
     return *this;
@@ -308,8 +312,8 @@ class TransientValue {
    */
   template <typename T>
   T GetAs() const {
-    const auto *const value = reinterpret_cast<const T *const>(&data_);
-    return *value;
+    //    const auto *const value = reinterpret_cast<const T *const>(data_);
+    return *(reinterpret_cast<const T *const>(data_));
   }
 
   /**
@@ -317,29 +321,23 @@ class TransientValue {
    * then assign the pointer to the TransientValue's internal data buffer.
    * @param other null-terminated C string to build a VARCHAR buffer for
    */
-  void CopyVarChar(const char *const c_string) {
+  void CopyVarlenEntry(const storage::VarlenEntry &varlen) {
     TERRIER_ASSERT(Type() == TypeId::VARCHAR,
                    "This TransientValue's type should be set to VARCHAR if this function is being called.");
-    // allocate a VARCHAR buffer
-    const auto *const other_varchar = reinterpret_cast<const char *const>(c_string);
-    const uint32_t length = *reinterpret_cast<const uint32_t *const>(other_varchar);
-    auto *const varchar = new char[length + sizeof(uint32_t)];
-
-    // copy the length field into the VARCHAR buffer
-    *(reinterpret_cast<uint32_t *const>(varchar)) = length;
-
-    // copy the VARCHAR contents into the VARCHAR buffer
-    char *const varchar_contents = varchar + sizeof(uint32_t);
-    const char *const other_varchar_contents = other_varchar + sizeof(uint32_t);
-    std::memcpy(varchar_contents, other_varchar_contents, length);
-
-    // copy the pointer to the VARCHAR buffer into the internal buffer
-    data_ = reinterpret_cast<uintptr_t>(varchar);
+    const auto length = varlen.Size();
+    if (length <= storage::VarlenEntry::InlineThreshold()) {
+      const auto new_varlen = storage::VarlenEntry::CreateInline(varlen.Content(), length);
+      std::memcpy(data_, &new_varlen, 16);
+      return;
+    }
+    auto *const non_inline = common::AllocationUtil::AllocateAligned(length);
+    std::memcpy(non_inline, varlen.Content(), length);
+    const auto new_varlen = storage::VarlenEntry::Create(non_inline, length, true);
+    std::memcpy(data_, &new_varlen, 16);
   }
 
   TypeId type_ = TypeId::INVALID;
-  // TODO(Matt): we should consider padding 7 bytes to inline small varlens in the future if we want
-  uintptr_t data_;
+  byte data_[16];
 };
 
 DEFINE_JSON_DECLARATIONS(TransientValue);

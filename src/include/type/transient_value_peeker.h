@@ -109,10 +109,8 @@ class TransientValuePeeker {
   static std::string_view PeekVarChar(const TransientValue &value) {
     TERRIER_ASSERT(!value.Null(), "Doesn't make sense to peek a NULL value.");
     TERRIER_ASSERT(value.Type() == TypeId::VARCHAR, "TypeId mismatch.");
-    const auto *varchar = value.GetAs<const char *>();
-    uint32_t length = *reinterpret_cast<const uint32_t *>(varchar);
-    const auto *ptr = varchar + sizeof(uint32_t);
-    return std::string_view(ptr, length);
+    const auto varlen = value.GetAs<const storage::VarlenEntry>();
+    return std::string_view(reinterpret_cast<const char *>(varlen.Content()), varlen.Size());
   }
 };
 

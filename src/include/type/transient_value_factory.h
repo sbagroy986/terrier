@@ -1,7 +1,9 @@
 #pragma once
 
 #include <cstring>
+
 #include "common/exception.h"
+#include "storage/storage_defs.h"
 #include "type/transient_value.h"
 #include "type/transient_value_peeker.h"
 #include "type/type_id.h"
@@ -86,13 +88,15 @@ class TransientValueFactory {
    */
   static TransientValue GetVarChar(const std::string_view value) {
     TERRIER_ASSERT(value.data() != nullptr, "Cannot build VARCHAR from nullptr.");
-    size_t length = value.length();
-    auto *varchar = new char[length + sizeof(uint32_t)];
-    // assert length fits in uint32_t
-    *(reinterpret_cast<uint32_t *const>(varchar)) = static_cast<uint32_t>(length);
-    auto *varchar_contents = varchar + sizeof(uint32_t);
-    std::memcpy(varchar_contents, value.data(), length);
-    return {TypeId::VARCHAR, varchar};
+    const auto length = value.length();
+    if (length <= storage::VarlenEntry::InlineThreshold()) {
+      const auto varlen = storage::VarlenEntry::CreateInline(reinterpret_cast<const byte *const>(value.data()), length);
+      return {TypeId::VARCHAR, varlen};
+    }
+    auto *const non_inline = common::AllocationUtil::AllocateAligned(length);
+    std::memcpy(non_inline, value.data(), length);
+    const auto varlen = storage::VarlenEntry::Create(non_inline, length, true);
+    return {TypeId::VARCHAR, varlen};
   }
 };
 
