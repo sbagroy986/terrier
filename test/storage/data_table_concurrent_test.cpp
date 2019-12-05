@@ -87,7 +87,8 @@ TEST_F(DataTableConcurrentTests, ConcurrentInsert) {
   const uint32_t num_iterations = 50;
   const uint32_t num_inserts = 10000;
   const uint16_t max_columns = 20;
-  const uint32_t num_threads = MultiThreadTestUtil::HardwareConcurrency();
+  // const uint32_t num_threads = MultiThreadTestUtil::HardwareConcurrency();
+  const uint32_t num_threads = 16;
   common::WorkerPool thread_pool(num_threads, {});
   for (uint32_t iteration = 0; iteration < num_iterations; iteration++) {
     storage::BlockLayout layout = StorageTestUtil::RandomLayoutNoVarlen(max_columns, &generator_);
@@ -100,7 +101,7 @@ TEST_F(DataTableConcurrentTests, ConcurrentInsert) {
                                                                &buffer_pool_));
     auto workload = [&](uint32_t id) {
       std::default_random_engine thread_generator(id);
-      for (uint32_t i = 0; i < num_inserts / num_threads; i++) fake_txns[id]->InsertRandomTuple(&thread_generator);
+      for (uint32_t i = 0; i < num_inserts; i++) fake_txns[id]->InsertRandomTuple(&thread_generator);
     };
     MultiThreadTestUtil::RunThreadsUntilFinish(&thread_pool, num_threads, workload);
     storage::ProjectedRowInitializer select_initializer =
@@ -117,42 +118,88 @@ TEST_F(DataTableConcurrentTests, ConcurrentInsert) {
   }
 }
 
-// Spawns multiple transactions that all begin at the same time.
-// Each transaction attempts to update the same tuple.
-// Therefore only one transaction should win, which is what we test for.
-// NOLINTNEXTLINE
-TEST_F(DataTableConcurrentTests, ConcurrentUpdateOneWriterWins) {
-  const uint32_t num_iterations = 100;
+TEST_F(DataTableConcurrentTests, ConcurrentScan) {
+  const uint32_t num_iterations = 50;
+  const uint32_t num_inserts = 500;
   const uint16_t max_columns = 20;
-  const uint32_t num_threads = MultiThreadTestUtil::HardwareConcurrency();
+  // const uint32_t num_threads = MultiThreadTestUtil::HardwareConcurrency();
+  const uint32_t num_threads = 16;
   common::WorkerPool thread_pool(num_threads, {});
   for (uint32_t iteration = 0; iteration < num_iterations; iteration++) {
     storage::BlockLayout layout = StorageTestUtil::RandomLayoutNoVarlen(max_columns, &generator_);
     storage::DataTable tested(&block_store_, layout, storage::layout_version_t(0));
-    FakeTransaction insert_txn(layout, &tested, null_ratio_(generator_), transaction::timestamp_t(0),
-                               transaction::timestamp_t(1), &buffer_pool_);
-    // Insert one tuple, the timestamp needs to show committed
-    storage::TupleSlot slot = insert_txn.InsertRandomTuple(&generator_);
-
     std::vector<std::unique_ptr<FakeTransaction>> fake_txns;
-    for (uint64_t thread = 0; thread < num_threads; thread++)
-      // need negative timestamp to denote uncommitted
-      fake_txns.emplace_back(std::make_unique<FakeTransaction>(
-          layout, &tested, null_ratio_(generator_), transaction::timestamp_t(2),
-          transaction::timestamp_t(static_cast<uint64_t>(-thread - 1)), &buffer_pool_));
-    std::atomic<uint32_t> success = 0, fail = 0;
+    for (uint32_t thread = 0; thread < num_threads; thread++)
+      // timestamps are irrelevant for inserts
+      fake_txns.emplace_back(std::make_unique<FakeTransaction>(layout, &tested, null_ratio_(generator_),
+                                                               transaction::timestamp_t(0), transaction::timestamp_t(0),
+                                                               &buffer_pool_));
     auto workload = [&](uint32_t id) {
       std::default_random_engine thread_generator(id);
-      // log whether update is successful
-      if (fake_txns[id]->RandomlyUpdateTuple(slot, &thread_generator))
-        success++;
-      else
-        fail++;
-    };
+      for (uint32_t i = 0; i < num_inserts; i++) {
+        fake_txns[id]->InsertRandomTuple(&thread_generator);
+        if(i%10==0) {
+          auto it = tested.begin();
+          uint32_t num_reads = 0;
+          while (it != tested.end()) {
+            num_reads++;
+            it++;        
+          }            
+        }
+      }
+    };    
     MultiThreadTestUtil::RunThreadsUntilFinish(&thread_pool, num_threads, workload);
-    EXPECT_EQ(1, success);
-    EXPECT_EQ(num_threads - 1, fail);
+
+    storage::ProjectedRowInitializer select_initializer =
+        storage::ProjectedRowInitializer::Create(layout, StorageTestUtil::ProjectionListAllColumns(layout));
+    auto *select_buffer = common::AllocationUtil::AllocateAligned(select_initializer.ProjectedRowSize());
+    for (auto &fake_txn : fake_txns) {
+      for (auto slot : fake_txn->InsertedTuples()) {
+        storage::ProjectedRow *select_row = select_initializer.InitializeRow(select_buffer);
+        tested.Select(fake_txn->GetTxn(), slot, select_row);
+        EXPECT_TRUE(StorageTestUtil::ProjectionListEqualShallow(layout, fake_txn->GetReferenceTuple(slot), select_row));
+      }
+    }
+    delete[] select_buffer;
   }
 }
+
+// // Spawns multiple transactions that all begin at the same time.
+// // Each transaction attempts to update the same tuple.
+// // Therefore only one transaction should win, which is what we test for.
+// // NOLINTNEXTLINE
+// TEST_F(DataTableConcurrentTests, ConcurrentUpdateOneWriterWins) {
+//   const uint32_t num_iterations = 100;
+//   const uint16_t max_columns = 20;
+//   const uint32_t num_threads = MultiThreadTestUtil::HardwareConcurrency();
+//   common::WorkerPool thread_pool(num_threads, {});
+//   for (uint32_t iteration = 0; iteration < num_iterations; iteration++) {
+//     storage::BlockLayout layout = StorageTestUtil::RandomLayoutNoVarlen(max_columns, &generator_);
+//     storage::DataTable tested(&block_store_, layout, storage::layout_version_t(0));
+//     FakeTransaction insert_txn(layout, &tested, null_ratio_(generator_), transaction::timestamp_t(0),
+//                                transaction::timestamp_t(1), &buffer_pool_);
+//     // Insert one tuple, the timestamp needs to show committed
+//     storage::TupleSlot slot = insert_txn.InsertRandomTuple(&generator_);
+
+//     std::vector<std::unique_ptr<FakeTransaction>> fake_txns;
+//     for (uint64_t thread = 0; thread < num_threads; thread++)
+//       // need negative timestamp to denote uncommitted
+//       fake_txns.emplace_back(std::make_unique<FakeTransaction>(
+//           layout, &tested, null_ratio_(generator_), transaction::timestamp_t(2),
+//           transaction::timestamp_t(static_cast<uint64_t>(-thread - 1)), &buffer_pool_));
+//     std::atomic<uint32_t> success = 0, fail = 0;
+//     auto workload = [&](uint32_t id) {
+//       std::default_random_engine thread_generator(id);
+//       // log whether update is successful
+//       if (fake_txns[id]->RandomlyUpdateTuple(slot, &thread_generator))
+//         success++;
+//       else
+//         fail++;
+//     };
+//     MultiThreadTestUtil::RunThreadsUntilFinish(&thread_pool, num_threads, workload);
+//     EXPECT_EQ(1, success);
+//     EXPECT_EQ(num_threads - 1, fail);
+//   }
+// }
 
 }  // namespace terrier
